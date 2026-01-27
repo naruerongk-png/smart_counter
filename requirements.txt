@@ -1,0 +1,7 @@
+ultralytics
+opencv-python
+opencv-python-headless
+paho-mqtt
+flask
+psutil
+numpy

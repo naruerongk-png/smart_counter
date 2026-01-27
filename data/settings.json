@@ -1,0 +1,9 @@
+{
+    "branch_name": "Branch_Windows",
+    "mqtt_broker": "127.0.0.1",
+    "mqtt_port": 1883,
+    "vpn_server_ip": "10.200.0.1",
+    "open_hour": 0,
+    "close_hour": 24,
+    "keep_days": 365
+}
