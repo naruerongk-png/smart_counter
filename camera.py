@@ -11,6 +11,11 @@ from config import IS_WINDOWS, UNIFORM_COLORS, system_settings, cameras_config, 
 from database import db
 from mqtt import mqtt_client
 
+# --- [ปรับปรุง] โหลดโมเดล AI แค่ครั้งเดียวตรงนี้ (Global) ---
+print("⏳ Loading AI Model...")
+shared_model = YOLO("yolov8n.pt")
+print("✅ Model Loaded!")
+
 class VideoCaptureThread:
     def __init__(self, src):
         if str(src).isdigit(): src = int(src)
@@ -89,134 +94,147 @@ class SmartCamera(threading.Thread):
 
     def run(self):
         print(f"🚀 [{self.cam_id}] AI Engine Started ({self.rtsp_url})")
-        model_name = "yolov8n"
-        model = YOLO(f"{model_name}.pt") 
+        # ไม่โหลด Model ใหม่ตรงนี้แล้ว ใช้ shared_model แทน
         
         while self.running:
-            cap = VideoCaptureThread(self.rtsp_url).start()
-            if not cap.isOpened(): cap.release(); time.sleep(5); continue
-            object_states, object_types = {}, {}
-            
-            while self.running:
-                frame = cap.read()
-                if frame is None: time.sleep(0.1); continue
-                h, w, _ = frame.shape
+            # เพิ่ม Try-Except ป้องกัน Thread ตายถ้าวิดีโอมีปัญหา
+            try:
+                cap = VideoCaptureThread(self.rtsp_url).start()
+                if not cap.isOpened(): 
+                    print(f"⚠️ [{self.cam_id}] Connection failed. Retrying...")
+                    cap.release()
+                    time.sleep(5)
+                    continue
                 
-                cy = int(h * self.config.get('line_ratio', 0.5))
-                cx = int(w * self.config.get('line_pos_x', 0.5))
-                offset_dist = int(h * self.config.get('offset_ratio', 0.05))
-                angle_deg = self.config.get('line_angle', 0)
-                length_ratio = self.config.get('line_length', 1.0)
-                uniform_color = self.config.get('uniform_color', 'None')
-                conf_thresh = self.config.get('conf_threshold', 0.3)
-                invert = self.config.get('invert_dir', False)
+                object_states, object_types = {}, {}
                 
-                cashier_mode = self.config.get('cashier_mode', False)
-                c_x = int(w * self.config.get('cashier_x', 0.3))
-                c_y = int(h * self.config.get('cashier_y', 0.3))
-                c_w = int(w * self.config.get('cashier_w', 0.4))
-                c_h = int(h * self.config.get('cashier_h', 0.4))
-                c_time = self.config.get('cashier_time', 5.0)
-
-                angle_rad = math.radians(angle_deg)
-                cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
-                nx, ny = -sin_a, cos_a 
-                half_len = int((w * length_ratio) / 2)
-                p1_x, p1_y = int(cx - half_len * cos_a), int(cy - half_len * sin_a)
-                p2_x, p2_y = int(cx + half_len * cos_a), int(cy + half_len * sin_a)
-
-                if not cashier_mode:
-                    cv2.line(frame, (p1_x, p1_y), (p2_x, p2_y), (0, 255, 0), 2)
-                    m_len = 20
-                    cv2.line(frame, (int(p1_x - m_len*nx), int(p1_y - m_len*ny)), (int(p1_x + m_len*nx), int(p1_y + m_len*ny)), (0, 0, 255), 2)
-                    cv2.line(frame, (int(p2_x - m_len*nx), int(p2_y - m_len*ny)), (int(p2_x + m_len*nx), int(p2_y + m_len*ny)), (0, 0, 255), 2)
-                    for d in [-1, 1]:
-                        bx1, by1 = int(p1_x + d * offset_dist * nx), int(p1_y + d * offset_dist * ny)
-                        bx2, by2 = int(p2_x + d * offset_dist * nx), int(p2_y + d * offset_dist * ny)
-                        cv2.line(frame, (bx1, by1), (bx2, by2), (0, 255, 255), 1)
-                
-                if cashier_mode:
-                    cv2.rectangle(frame, (c_x, c_y), (c_x + c_w, c_y + c_h), (0, 255, 255), 2)
-                    cv2.putText(frame, f"CASHIER ({c_time}s)", (c_x, c_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-
-                is_open = system_settings['open_hour'] <= datetime.datetime.now().hour < system_settings['close_hour']
-
-                results = model.track(frame, persist=True, classes=[0], conf=conf_thresh, verbose=False, tracker="bytetrack.yaml")
-                if results[0].boxes.id is not None:
-                    boxes = results[0].boxes.xywh.cpu()
-                    ids = results[0].boxes.id.int().cpu().tolist()
-                    current_ids = set(ids)
+                while self.running:
+                    frame = cap.read()
+                    if frame is None: time.sleep(0.1); continue
+                    h, w, _ = frame.shape
                     
-                    for tid in list(self.dwell_times.keys()):
-                        if tid not in current_ids: del self.dwell_times[tid]
+                    cy = int(h * self.config.get('line_ratio', 0.5))
+                    cx = int(w * self.config.get('line_pos_x', 0.5))
+                    offset_dist = int(h * self.config.get('offset_ratio', 0.05))
+                    angle_deg = self.config.get('line_angle', 0)
+                    length_ratio = self.config.get('line_length', 1.0)
+                    uniform_color = self.config.get('uniform_color', 'None')
+                    conf_thresh = self.config.get('conf_threshold', 0.3)
+                    invert = self.config.get('invert_dir', False)
+                    
+                    cashier_mode = self.config.get('cashier_mode', False)
+                    c_x = int(w * self.config.get('cashier_x', 0.3))
+                    c_y = int(h * self.config.get('cashier_y', 0.3))
+                    c_w = int(w * self.config.get('cashier_w', 0.4))
+                    c_h = int(h * self.config.get('cashier_h', 0.4))
+                    c_time = self.config.get('cashier_time', 5.0)
 
-                    for box, track_id in zip(boxes, ids):
-                        x, y, bw, bh = box
-                        center_x, center_y = int(x), int(y)
+                    angle_rad = math.radians(angle_deg)
+                    cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
+                    nx, ny = -sin_a, cos_a 
+                    half_len = int((w * length_ratio) / 2)
+                    p1_x, p1_y = int(cx - half_len * cos_a), int(cy - half_len * sin_a)
+                    p2_x, p2_y = int(cx + half_len * cos_a), int(cy + half_len * sin_a)
+
+                    if not cashier_mode:
+                        cv2.line(frame, (p1_x, p1_y), (p2_x, p2_y), (0, 255, 0), 2)
+                        m_len = 20
+                        cv2.line(frame, (int(p1_x - m_len*nx), int(p1_y - m_len*ny)), (int(p1_x + m_len*nx), int(p1_y + m_len*ny)), (0, 0, 255), 2)
+                        cv2.line(frame, (int(p2_x - m_len*nx), int(p2_y - m_len*ny)), (int(p2_x + m_len*nx), int(p2_y + m_len*ny)), (0, 0, 255), 2)
+                        for d in [-1, 1]:
+                            bx1, by1 = int(p1_x + d * offset_dist * nx), int(p1_y + d * offset_dist * ny)
+                            bx2, by2 = int(p2_x + d * offset_dist * nx), int(p2_y + d * offset_dist * ny)
+                            cv2.line(frame, (bx1, by1), (bx2, by2), (0, 255, 255), 1)
+                    
+                    if cashier_mode:
+                        cv2.rectangle(frame, (c_x, c_y), (c_x + c_w, c_y + c_h), (0, 255, 255), 2)
+                        cv2.putText(frame, f"CASHIER ({c_time}s)", (c_x, c_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+                    is_open = system_settings['open_hour'] <= datetime.datetime.now().hour < system_settings['close_hour']
+
+                    # [ปรับปรุง] ใช้ shared_model แทน model ตัวเดิม
+                    results = shared_model.track(frame, persist=True, classes=[0], conf=conf_thresh, verbose=False, tracker="bytetrack.yaml")
+                    
+                    if results[0].boxes.id is not None:
+                        boxes = results[0].boxes.xywh.cpu()
+                        ids = results[0].boxes.id.int().cpu().tolist()
+                        current_ids = set(ids)
                         
-                        if track_id not in object_types: object_types[track_id] = 'staff' if self.check_uniform(frame, x, y, bw, bh, uniform_color) else 'customer'
-                        role = object_types[track_id]
-                        color = (0, 0, 255) if role == 'staff' else (0, 165, 255)
-                        label = "STAFF" if role == 'staff' else f"ID:{track_id}"
-                        cv2.rectangle(frame, (int(x-bw/2), int(y-bh/2)), (int(x+bw/2), int(y+bh/2)), color, 2)
-                        cv2.putText(frame, label, (int(x-bw/2), int(y-bh/2)-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                        for tid in list(self.dwell_times.keys()):
+                            if tid not in current_ids: del self.dwell_times[tid]
 
-                        if cashier_mode and role == 'customer' and is_open:
-                            if c_x < center_x < c_x + c_w and c_y < center_y < c_y + c_h:
-                                if track_id not in self.dwell_times: self.dwell_times[track_id] = time.time()
-                                else:
-                                    elapsed = time.time() - self.dwell_times[track_id]
-                                    remaining = max(0, c_time - elapsed)
-                                    cv2.putText(frame, f"{remaining:.1f}s", (center_x, center_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-                                    if elapsed >= c_time and track_id not in self.checked_out_ids:
-                                        self.stats['checkout'] += 1
-                                        self.checked_out_ids.add(track_id)
-                                        payload = {"branch": system_settings['branch_name'], "cam_id": self.cam_id, "ts": time.time(), "checkout": 1, "is_staff": 0}
-                                        if network_status['mqtt']:
-                                            mqtt_client.publish(f"shop/{system_settings['branch_name']}/{self.cam_id}/people_count", json.dumps(payload))
-                                            db.save_history_only(payload)
-                                        else: db.save(payload)
-                                        cv2.rectangle(frame, (c_x, c_y), (c_x + c_w, c_y + c_h), (0, 255, 0), -1) 
-                            else:
-                                if track_id in self.dwell_times: del self.dwell_times[track_id]
+                        for box, track_id in zip(boxes, ids):
+                            x, y, bw, bh = box
+                            center_x, center_y = int(x), int(y)
+                            
+                            if track_id not in object_types: object_types[track_id] = 'staff' if self.check_uniform(frame, x, y, bw, bh, uniform_color) else 'customer'
+                            role = object_types[track_id]
+                            color = (0, 0, 255) if role == 'staff' else (0, 165, 255)
+                            label = "STAFF" if role == 'staff' else f"ID:{track_id}"
+                            cv2.rectangle(frame, (int(x-bw/2), int(y-bh/2)), (int(x+bw/2), int(y+bh/2)), color, 2)
+                            cv2.putText(frame, label, (int(x-bw/2), int(y-bh/2)-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-                        if not cashier_mode:
-                            dx, dy = center_x - cx, center_y - cy
-                            if abs(dx * cos_a + dy * sin_a) > half_len: continue
-                            dist_from_line = dx * nx + dy * ny
-                            current_state = "UP" if dist_from_line < -offset_dist else ("DOWN" if dist_from_line > offset_dist else "ZONE")
-
-                            if current_state != "ZONE" and track_id in object_states:
-                                last_state = object_states[track_id]
-                                if current_state != last_state:
-                                    raw_dir = None
-                                    if last_state == "UP" and current_state == "DOWN": raw_dir = "in"
-                                    elif last_state == "DOWN" and current_state == "UP": raw_dir = "out"
-                                    if raw_dir:
-                                        final_dir = "out" if (raw_dir == "in" and invert) or (raw_dir == "out" and not invert) else "in"
-                                        if invert and raw_dir == "out": final_dir = "in" 
-                                        if invert and raw_dir == "in": final_dir = "out"
-                                        
-                                        if role == 'staff':
-                                            self.stats[f'staff_{final_dir}'] += 1
-                                            payload = {"branch": system_settings['branch_name'], "cam_id": self.cam_id, "ts": time.time(), "in": 1 if final_dir=="in" else 0, "out": 1 if final_dir=="out" else 0, "is_staff": 1}
-                                            db.save_history_only(payload)
-                                        elif is_open:
-                                            self.stats[final_dir] += 1
-                                            payload = {"branch": system_settings['branch_name'], "cam_id": self.cam_id, "ts": time.time(), "in": 1 if final_dir=="in" else 0, "out": 1 if final_dir=="out" else 0, "is_staff": 0}
+                            if cashier_mode and role == 'customer' and is_open:
+                                if c_x < center_x < c_x + c_w and c_y < center_y < c_y + c_h:
+                                    if track_id not in self.dwell_times: self.dwell_times[track_id] = time.time()
+                                    else:
+                                        elapsed = time.time() - self.dwell_times[track_id]
+                                        remaining = max(0, c_time - elapsed)
+                                        cv2.putText(frame, f"{remaining:.1f}s", (center_x, center_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                                        if elapsed >= c_time and track_id not in self.checked_out_ids:
+                                            self.stats['checkout'] += 1
+                                            self.checked_out_ids.add(track_id)
+                                            payload = {"branch": system_settings['branch_name'], "cam_id": self.cam_id, "ts": time.time(), "checkout": 1, "is_staff": 0}
                                             if network_status['mqtt']:
                                                 mqtt_client.publish(f"shop/{system_settings['branch_name']}/{self.cam_id}/people_count", json.dumps(payload))
                                                 db.save_history_only(payload)
                                             else: db.save(payload)
-                                            cv2.circle(frame, (center_x, center_y), 15, (0, 255, 0), -1)
-                                            cv2.putText(frame, final_dir.upper(), (center_x, center_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
+                                            cv2.rectangle(frame, (c_x, c_y), (c_x + c_w, c_y + c_h), (0, 255, 0), -1) 
+                                else:
+                                    if track_id in self.dwell_times: del self.dwell_times[track_id]
+
+                            if not cashier_mode:
+                                dx, dy = center_x - cx, center_y - cy
+                                if abs(dx * cos_a + dy * sin_a) > half_len: continue
+                                dist_from_line = dx * nx + dy * ny
+                                current_state = "UP" if dist_from_line < -offset_dist else ("DOWN" if dist_from_line > offset_dist else "ZONE")
+
+                                if current_state != "ZONE" and track_id in object_states:
+                                    last_state = object_states[track_id]
+                                    if current_state != last_state:
+                                        raw_dir = None
+                                        if last_state == "UP" and current_state == "DOWN": raw_dir = "in"
+                                        elif last_state == "DOWN" and current_state == "UP": raw_dir = "out"
+                                        if raw_dir:
+                                            final_dir = "out" if (raw_dir == "in" and invert) or (raw_dir == "out" and not invert) else "in"
+                                            if invert and raw_dir == "out": final_dir = "in" 
+                                            if invert and raw_dir == "in": final_dir = "out"
+                                            
+                                            if role == 'staff':
+                                                self.stats[f'staff_{final_dir}'] += 1
+                                                payload = {"branch": system_settings['branch_name'], "cam_id": self.cam_id, "ts": time.time(), "in": 1 if final_dir=="in" else 0, "out": 1 if final_dir=="out" else 0, "is_staff": 1}
+                                                db.save_history_only(payload)
+                                            elif is_open:
+                                                self.stats[final_dir] += 1
+                                                payload = {"branch": system_settings['branch_name'], "cam_id": self.cam_id, "ts": time.time(), "in": 1 if final_dir=="in" else 0, "out": 1 if final_dir=="out" else 0, "is_staff": 0}
+                                                if network_status['mqtt']:
+                                                    mqtt_client.publish(f"shop/{system_settings['branch_name']}/{self.cam_id}/people_count", json.dumps(payload))
+                                                    db.save_history_only(payload)
+                                                else: db.save(payload)
+                                                cv2.circle(frame, (center_x, center_y), 15, (0, 255, 0), -1)
+                                                cv2.putText(frame, final_dir.upper(), (center_x, center_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
+                                        object_states[track_id] = current_state
+                                elif current_state != "ZONE":
                                     object_states[track_id] = current_state
-                            elif current_state != "ZONE":
-                                object_states[track_id] = current_state
-                
-                display_frame = cv2.resize(frame, (640, int(640 * h / w)))
-                with self.lock: self.output_frame = display_frame
-            cap.release()
+                    
+                    display_frame = cv2.resize(frame, (640, int(640 * h / w)))
+                    with self.lock: self.output_frame = display_frame
+            
+            except Exception as e:
+                print(f"❌ [{self.cam_id}] Camera Error: {e}")
+                time.sleep(5)
+            finally:
+                if 'cap' in locals() and cap: cap.release()
 
 active_cameras = {}
 def init_cameras():

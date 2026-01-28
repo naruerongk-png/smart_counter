@@ -6,7 +6,6 @@ import logging
 # Get a logger for the current module
 logger = logging.getLogger(__name__)
 
-
 # ==========================================
 # 1. SYSTEM CONFIG & CONSTANTS
 # ==========================================
@@ -35,7 +34,8 @@ DEFAULT_SETTINGS = {
     "mqtt_broker": "127.0.0.1",
     "mqtt_port": 1883,
     "vpn_server_ip": "10.200.0.1",
-    "open_hour": 0, "close_hour": 24, "keep_days": 365 # เก็บข้อมูล 1 ปี
+    "open_hour": 0, "close_hour": 24, "keep_days": 365,
+    "admin_password": "admin"
 }
 
 system_settings = DEFAULT_SETTINGS.copy()
@@ -46,12 +46,18 @@ def load_settings():
     global system_settings
     if os.path.exists(SETTINGS_FILE):
         try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                system_settings.update(data)
         except Exception as e:
             logger.exception(f"Error loading settings file: {e}")
-    else: save_settings()
+    else:
+        save_settings()
 
 def save_settings():
     try:
+        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(system_settings, f, indent=4)
     except Exception as e:
         logger.exception(f"Error saving settings file: {e}")
 
@@ -59,15 +65,19 @@ def load_cameras_config():
     global cameras_config
     if os.path.exists(CAMERAS_FILE):
         try:
-            with open(CAMERAS_FILE, 'r', encoding='utf-8') as f: cameras_config = json.load(f)
+            with open(CAMERAS_FILE, 'r', encoding='utf-8') as f:
+                cameras_config = json.load(f)
             return
         except Exception as e:
             logger.exception(f"Error loading cameras config file: {e}")
-    if not cameras_config: save_cameras_config()
+    
+    if not cameras_config:
+        save_cameras_config()
 
 def save_cameras_config():
     try:
-        with open(CAMERAS_FILE, 'w', encoding='utf-8') as f: json.dump(cameras_config, f, indent=4)
+        with open(CAMERAS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cameras_config, f, indent=4)
     except Exception as e:
         logger.exception(f"Error saving cameras config file: {e}")
 
