@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  counter:
+    build: .
+    container_name: shop_counter_app
+    restart: always
+    devices:
+      - /dev/dri:/dev/dri # Intel NPU/iGPU Access
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app # Mount โฟลเดอร์ปัจจุบัน
+      - ./data:/app/data # เก็บ DB
+      - /etc/wireguard:/etc/wireguard # <--- เพิ่มบรรทัดนี้ (เพื่อให้แก้ VPN ได้)
+    env_file:
+      - .env
+    environment:
+      - BRANCH_NAME=${BRANCH_NAME}
+      - RTSP_URL=${RTSP_URL}
+      - MQTT_BROKER=${MQTT_BROKER}
+      - TZ=Asia/Bangkok
+      - VPN_CHECK_IP=10.200.0.1 # IP Server VPN ที่จะใช้เช็ค
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: auto_updater
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DOCKER_API_VERSION=1.44
+    command: --interval 3600 --cleanup
+    restart: always

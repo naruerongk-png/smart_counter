@@ -11,36 +11,69 @@ from config import IS_WINDOWS, UNIFORM_COLORS, system_settings, cameras_config, 
 from database import db
 from mqtt import mqtt_client
 
-# --- [ปรับปรุง] โหลดโมเดล AI แค่ครั้งเดียวตรงนี้ (Global) ---
+# ==========================================
+# AI MODEL SETUP
+# ==========================================
 print("⏳ Loading AI Model...")
 shared_model = YOLO("yolov8n.pt")
-print("✅ Model Loaded!")
+try:
+    print("⚙️ Fusing layers for optimization...")
+    shared_model.fuse()
+except Exception as e:
+    print(f"⚠️ Fuse warning: {e}")
+print("✅ Model Loaded & Fused!")
+
+model_lock = threading.Lock()
 
 class VideoCaptureThread:
     def __init__(self, src):
-        if str(src).isdigit(): src = int(src)
-        self.stream = cv2.VideoCapture(src)
-        if IS_WINDOWS and not self.stream.isOpened():
-             self.stream = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+        self.src = src
+        # เลือก Driver ให้เหมาะสม
+        if str(src).isdigit():
+            self.src = int(src)
+            if IS_WINDOWS:
+                self.stream = cv2.VideoCapture(self.src, cv2.CAP_DSHOW)
+            else:
+                self.stream = cv2.VideoCapture(self.src)
+        else:
+            self.stream = cv2.VideoCapture(self.src, cv2.CAP_FFMPEG)
+            
         self.grabbed, self.frame = self.stream.read()
         self.stopped = False
         self.lock = threading.Lock()
+    
     def start(self):
         threading.Thread(target=self.update, args=(), daemon=True).start()
         return self
+    
     def update(self):
         while not self.stopped:
-            grabbed, frame = self.stream.read()
-            with self.lock:
-                self.grabbed = grabbed
-                if grabbed: self.frame = frame
-            if not grabbed: time.sleep(0.1)
+            try:
+                grabbed, frame = self.stream.read()
+                with self.lock:
+                    self.grabbed = grabbed
+                    if grabbed: self.frame = frame
+                
+                if not grabbed: 
+                    time.sleep(0.2)
+            except cv2.error as e:
+                # [FIX] ถ้าสั่งหยุด (stopped=True) ไม่ต้องแจ้ง Error ให้รำคาญใจ
+                if self.stopped: break
+                print(f"⚠️ OpenCV Error (Connection might be unstable): {e}")
+                time.sleep(1)
+            except Exception as e:
+                if self.stopped: break
+                print(f"⚠️ Video Thread Error: {e}")
+                time.sleep(1)
+
     def read(self):
         with self.lock: return self.frame.copy() if self.grabbed else None
     def isOpened(self): return self.stream.isOpened()
     def release(self):
         self.stopped = True
-        self.stream.release()
+        try:
+            self.stream.release()
+        except: pass
 
 class SmartCamera(threading.Thread):
     def __init__(self, cam_id, rtsp_url, config=None):
@@ -94,23 +127,29 @@ class SmartCamera(threading.Thread):
 
     def run(self):
         print(f"🚀 [{self.cam_id}] AI Engine Started ({self.rtsp_url})")
-        # ไม่โหลด Model ใหม่ตรงนี้แล้ว ใช้ shared_model แทน
         
         while self.running:
-            # เพิ่ม Try-Except ป้องกัน Thread ตายถ้าวิดีโอมีปัญหา
+            cap = None
             try:
                 cap = VideoCaptureThread(self.rtsp_url).start()
-                if not cap.isOpened(): 
-                    print(f"⚠️ [{self.cam_id}] Connection failed. Retrying...")
+                time.sleep(2) 
+                
+                if not cap.isOpened() or not cap.grabbed:
+                    print(f"⚠️ [{self.cam_id}] Connection failed. Retrying in 10s...")
                     cap.release()
-                    time.sleep(5)
+                    time.sleep(10)
                     continue
                 
                 object_states, object_types = {}, {}
+                print(f"✅ [{self.cam_id}] Stream Connected!")
                 
                 while self.running:
                     frame = cap.read()
-                    if frame is None: time.sleep(0.1); continue
+                    if frame is None: 
+                        time.sleep(0.1)
+                        if cap.stopped: break 
+                        continue
+                        
                     h, w, _ = frame.shape
                     
                     cy = int(h * self.config.get('line_ratio', 0.5))
@@ -138,9 +177,6 @@ class SmartCamera(threading.Thread):
 
                     if not cashier_mode:
                         cv2.line(frame, (p1_x, p1_y), (p2_x, p2_y), (0, 255, 0), 2)
-                        m_len = 20
-                        cv2.line(frame, (int(p1_x - m_len*nx), int(p1_y - m_len*ny)), (int(p1_x + m_len*nx), int(p1_y + m_len*ny)), (0, 0, 255), 2)
-                        cv2.line(frame, (int(p2_x - m_len*nx), int(p2_y - m_len*ny)), (int(p2_x + m_len*nx), int(p2_y + m_len*ny)), (0, 0, 255), 2)
                         for d in [-1, 1]:
                             bx1, by1 = int(p1_x + d * offset_dist * nx), int(p1_y + d * offset_dist * ny)
                             bx2, by2 = int(p2_x + d * offset_dist * nx), int(p2_y + d * offset_dist * ny)
@@ -152,8 +188,8 @@ class SmartCamera(threading.Thread):
 
                     is_open = system_settings['open_hour'] <= datetime.datetime.now().hour < system_settings['close_hour']
 
-                    # [ปรับปรุง] ใช้ shared_model แทน model ตัวเดิม
-                    results = shared_model.track(frame, persist=True, classes=[0], conf=conf_thresh, verbose=False, tracker="bytetrack.yaml")
+                    with model_lock:
+                        results = shared_model.track(frame, persist=True, classes=[0], conf=conf_thresh, verbose=False, tracker="bytetrack.yaml")
                     
                     if results[0].boxes.id is not None:
                         boxes = results[0].boxes.xywh.cpu()
@@ -170,9 +206,7 @@ class SmartCamera(threading.Thread):
                             if track_id not in object_types: object_types[track_id] = 'staff' if self.check_uniform(frame, x, y, bw, bh, uniform_color) else 'customer'
                             role = object_types[track_id]
                             color = (0, 0, 255) if role == 'staff' else (0, 165, 255)
-                            label = "STAFF" if role == 'staff' else f"ID:{track_id}"
                             cv2.rectangle(frame, (int(x-bw/2), int(y-bh/2)), (int(x+bw/2), int(y+bh/2)), color, 2)
-                            cv2.putText(frame, label, (int(x-bw/2), int(y-bh/2)-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
                             if cashier_mode and role == 'customer' and is_open:
                                 if c_x < center_x < c_x + c_w and c_y < center_y < c_y + c_h:
@@ -222,7 +256,6 @@ class SmartCamera(threading.Thread):
                                                     db.save_history_only(payload)
                                                 else: db.save(payload)
                                                 cv2.circle(frame, (center_x, center_y), 15, (0, 255, 0), -1)
-                                                cv2.putText(frame, final_dir.upper(), (center_x, center_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
                                         object_states[track_id] = current_state
                                 elif current_state != "ZONE":
                                     object_states[track_id] = current_state
@@ -231,10 +264,10 @@ class SmartCamera(threading.Thread):
                     with self.lock: self.output_frame = display_frame
             
             except Exception as e:
-                print(f"❌ [{self.cam_id}] Camera Error: {e}")
+                print(f"❌ [{self.cam_id}] System Error: {e}")
                 time.sleep(5)
             finally:
-                if 'cap' in locals() and cap: cap.release()
+                if cap: cap.release()
 
 active_cameras = {}
 def init_cameras():

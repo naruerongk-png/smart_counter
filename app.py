@@ -98,10 +98,23 @@ DASHBOARD_PAGE = """
                         <div style="height: 250px;"><canvas id="mainChart"></canvas></div>
                     </div>
                 </div>
-                <ul class="nav nav-tabs mb-3" id="camTabs">{% for cam_id, cam in cameras.items() %}<li class="nav-item"><button class="nav-link {% if loop.first %}active{% endif %}" onclick="switchCam('{{ cam_id }}')">{{ cam.config.name }}</button></li>{% endfor %}</ul>
+                <ul class="nav nav-tabs mb-3" id="camTabs">
+                    {% for cam_id, cam in cameras.items() %}
+                    <li class="nav-item">
+                        <button class="nav-link {% if loop.first %}active{% endif %}" 
+                                id="tab-{{ cam_id }}"
+                                onclick="switchCam('{{ cam_id }}')">
+                            {{ cam.config.name }}
+                        </button>
+                    </li>
+                    {% endfor %}
+                </ul>
+                
                 {% for cam_id, cam in cameras.items() %}
                 <div id="view-{{ cam_id }}" class="cam-view {% if loop.first %}active{% endif %}">
-                    <div class="feed-container"><img src="" data-src="{{ url_for('video_feed', cam_id=cam_id) }}" class="camera-feed" id="img-{{ cam_id }}"></div>
+                    <div class="feed-container">
+                        <img src="{{ url_for('video_feed', cam_id=cam_id) }}" class="camera-feed" id="img-{{ cam_id }}">
+                    </div>
                     <div class="row g-2 mt-2 justify-content-center">
                         <div class="col-3 text-center border-bottom border-success border-3 py-2 bg-white rounded mx-1"><small>IN</small><h4 class="text-success m-0" id="in-{{ cam_id }}">0</h4></div>
                         <div class="col-3 text-center border-bottom border-warning border-3 py-2 bg-white rounded mx-1"><small>OUT</small><h4 class="text-dark m-0" id="out-{{ cam_id }}">0</h4></div>
@@ -177,14 +190,12 @@ DASHBOARD_PAGE = """
         
         function loadChart(mode) {
             currentMode = mode;
-            // Highlight active button
             document.querySelectorAll('.btn-group button').forEach(b => b.classList.remove('active'));
             
             // [FIX] เช็คว่ามี Event หรือไม่ก่อนเรียกใช้ เพื่อป้องกัน Error ตอนโหลดหน้าครั้งแรก
             if (typeof event !== 'undefined' && event.type === 'click') {
                 event.target.classList.add('active');
             } else {
-                // คืนค่า Active ให้ปุ่มตามโหมดปัจจุบัน
                 const btns = document.querySelectorAll('.btn-group button');
                 if (mode === 'hourly' && btns[0]) btns[0].classList.add('active');
                 else if (mode === 'daily' && btns[1]) btns[1].classList.add('active');
@@ -218,11 +229,16 @@ DASHBOARD_PAGE = """
         // Initial Load
         loadChart('hourly');
 
-        function switchCam(id) { document.querySelectorAll('.cam-view').forEach(el => el.classList.remove('active')); document.querySelectorAll('#camTabs .nav-link').forEach(el => el.classList.remove('active')); document.getElementById('view-' + id).classList.add('active'); event.target.classList.add('active'); const img = document.getElementById('img-' + id); if(!img.src) img.src = img.getAttribute('data-src'); }
-        
-        // Auto-load first camera
-        const firstImg = document.querySelector('.camera-feed'); 
-        if(firstImg) firstImg.src = firstImg.getAttribute('data-src');
+        function switchCam(id) { 
+            // [FIX] เปลี่ยน Tab ให้ถูกต้อง โดยไม่ต้องพึ่ง global event
+            document.querySelectorAll('.cam-view').forEach(el => el.classList.remove('active')); 
+            document.querySelectorAll('#camTabs .nav-link').forEach(el => el.classList.remove('active')); 
+            
+            document.getElementById('view-' + id).classList.add('active'); 
+            
+            const btn = document.getElementById('tab-' + id);
+            if(btn) btn.classList.add('active');
+        }
         
         function upd(id, key, val) { 
             let v = val; if(key === 'invert_dir' || key === 'cashier_mode') v = val; else if(key !== 'uniform_color') v = parseFloat(val); 

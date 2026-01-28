@@ -7,18 +7,7 @@
             "line_pos_x": 0.5,
             "offset_ratio": 0.05,
             "line_angle": 0,
-            "line_length": 1.0
-        }
-    },
-    "cam1769579926": {
-        "url": "rtsp://admin:Admin%401234@192.168.2.2:554/cam/realmonitor?channel=1&subtype=0",
-        "config": {
-            "name": "Cashier",
-            "line_ratio": 0.5,
-            "line_pos_x": 0.5,
-            "offset_ratio": 0.05,
-            "line_angle": 0,
-            "line_length": 1.0
+            "line_length": 0.45
         }
     }
 }
