@@ -4,6 +4,7 @@ import threading
 import math
 import datetime
 import json
+import os
 import numpy as np
 from ultralytics import YOLO
 
@@ -12,16 +13,37 @@ from database import db
 from mqtt import mqtt_client
 
 # ==========================================
-# AI MODEL SETUP
+# AI MODEL SETUP (OpenVINO Support)
 # ==========================================
-print("⏳ Loading AI Model...")
-shared_model = YOLO("yolov8n.pt")
-try:
-    print("⚙️ Fusing layers for optimization...")
-    shared_model.fuse()
-except Exception as e:
-    print(f"⚠️ Fuse warning: {e}")
-print("✅ Model Loaded & Fused!")
+MODEL_NAME = "yolov8n"
+OPENVINO_DIR = f"{MODEL_NAME}_openvino_model"
+
+print("⏳ Checking AI Model...")
+
+# 1. ตรวจสอบว่ามีโฟลเดอร์ OpenVINO หรือยัง ถ้าไม่มีให้ทำการ Export
+if not os.path.exists(OPENVINO_DIR):
+    print(f"⚙️ OpenVINO model not found. Exporting {MODEL_NAME}.pt to OpenVINO format...")
+    try:
+        # โหลดโมเดล PyTorch ปกติมาเพื่อ Export
+        model = YOLO(f"{MODEL_NAME}.pt")
+        # สั่ง Export เป็น OpenVINO (half=True เพื่อความเร็วและประหยัดแรม)
+        model.export(format="openvino", half=True)
+        print("✅ Export Success!")
+    except Exception as e:
+        print(f"❌ Export failed: {e}. Fallback to PyTorch model.")
+
+# 2. โหลดโมเดล (เลือก OpenVINO ถ้ามี ถ้าไม่มีใช้ .pt เหมือนเดิม)
+if os.path.exists(OPENVINO_DIR):
+    print(f"🚀 Loading OpenVINO Model: {OPENVINO_DIR}")
+    shared_model = YOLO(OPENVINO_DIR, task="detect")
+else:
+    print(f"⚠️ Loading Standard PyTorch Model: {MODEL_NAME}.pt")
+    shared_model = YOLO(f"{MODEL_NAME}.pt")
+    try:
+        shared_model.fuse()
+    except: pass
+
+print("✅ Model Ready!")
 
 model_lock = threading.Lock()
 
@@ -36,6 +58,7 @@ class VideoCaptureThread:
             else:
                 self.stream = cv2.VideoCapture(self.src)
         else:
+            # ใช้ FFMPEG สำหรับ RTSP
             self.stream = cv2.VideoCapture(self.src, cv2.CAP_FFMPEG)
             
         self.grabbed, self.frame = self.stream.read()
@@ -56,14 +79,7 @@ class VideoCaptureThread:
                 
                 if not grabbed: 
                     time.sleep(0.2)
-            except cv2.error as e:
-                # [FIX] ถ้าสั่งหยุด (stopped=True) ไม่ต้องแจ้ง Error ให้รำคาญใจ
-                if self.stopped: break
-                print(f"⚠️ OpenCV Error (Connection might be unstable): {e}")
-                time.sleep(1)
-            except Exception as e:
-                if self.stopped: break
-                print(f"⚠️ Video Thread Error: {e}")
+            except Exception:
                 time.sleep(1)
 
     def read(self):
@@ -71,8 +87,7 @@ class VideoCaptureThread:
     def isOpened(self): return self.stream.isOpened()
     def release(self):
         self.stopped = True
-        try:
-            self.stream.release()
+        try: self.stream.release()
         except: pass
 
 class SmartCamera(threading.Thread):
@@ -140,8 +155,8 @@ class SmartCamera(threading.Thread):
                     time.sleep(10)
                     continue
                 
-                object_states, object_types = {}, {}
                 print(f"✅ [{self.cam_id}] Stream Connected!")
+                object_states, object_types = {}, {}
                 
                 while self.running:
                     frame = cap.read()
@@ -188,14 +203,15 @@ class SmartCamera(threading.Thread):
 
                     is_open = system_settings['open_hour'] <= datetime.datetime.now().hour < system_settings['close_hour']
 
+                    # ใช้ Shared Model (OpenVINO)
                     with model_lock:
                         results = shared_model.track(frame, persist=True, classes=[0], conf=conf_thresh, verbose=False, tracker="bytetrack.yaml")
                     
                     if results[0].boxes.id is not None:
                         boxes = results[0].boxes.xywh.cpu()
                         ids = results[0].boxes.id.int().cpu().tolist()
-                        current_ids = set(ids)
                         
+                        current_ids = set(ids)
                         for tid in list(self.dwell_times.keys()):
                             if tid not in current_ids: del self.dwell_times[tid]
 
@@ -213,8 +229,6 @@ class SmartCamera(threading.Thread):
                                     if track_id not in self.dwell_times: self.dwell_times[track_id] = time.time()
                                     else:
                                         elapsed = time.time() - self.dwell_times[track_id]
-                                        remaining = max(0, c_time - elapsed)
-                                        cv2.putText(frame, f"{remaining:.1f}s", (center_x, center_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
                                         if elapsed >= c_time and track_id not in self.checked_out_ids:
                                             self.stats['checkout'] += 1
                                             self.checked_out_ids.add(track_id)
